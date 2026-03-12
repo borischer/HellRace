@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>USDZ → GLB Converter</title>
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 60px auto; }
+    button { padding: 10px 24px; font-size: 16px; margin: 8px 4px; cursor: pointer; }
+    #status { margin-top: 20px; white-space: pre-wrap; color: #333; }
+  </style>
+</head>
+<body>
+  <h1>USDZ → GLB Converter</h1>
+  <p>Click a button to convert each file. The GLB will download automatically.</p>
+  <button onclick="convert('lambo_low.usdz', 'lambo_low.glb')">Convert lambo_low.usdz</button>
+  <button onclick="convert('lambo_high.usdz', 'lambo_high.glb')">Convert lambo_high.usdz</button>
+  <div id="status"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.163.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { USDZLoader } from 'three/addons/loaders/USDZLoader.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+
+const status = document.getElementById('status');
+
+function log(msg) {
+  status.textContent += msg + '\n';
+}
+
+window.convert = async function(inputFile, outputFile) {
+  status.textContent = '';
+  log(`Loading ${inputFile}...`);
+  const t0 = performance.now();
+
+  try {
+    const loader = new USDZLoader();
+    const model = await loader.loadAsync(inputFile);
+    const t1 = performance.now();
+    log(`Loaded in ${((t1 - t0) / 1000).toFixed(1)}s`);
+
+    // Ensure all materials are compatible
+    model.traverse((child) => {
+      if (child.isMesh && child.material) {
+        child.material.side = THREE.FrontSide;
+      }
+    });
+
+    log(`Exporting to GLB...`);
+    const exporter = new GLTFExporter();
+    const glb = await exporter.parseAsync(model, { binary: true });
+    const t2 = performance.now();
+    log(`Exported in ${((t2 - t1) / 1000).toFixed(1)}s`);
+
+    // Download
+    const blob = new Blob([glb], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = outputFile;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    const sizeMB = (blob.size / (1024 * 1024)).toFixed(2);
+    log(`Done! Downloaded ${outputFile} (${sizeMB} MB)`);
+  } catch (err) {
+    log(`Error: ${err.message}`);
+    console.error(err);
+  }
+};
+</script>
+</body>
+</html>

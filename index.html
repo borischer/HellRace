@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hell Racer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #000;
+      overflow: hidden;
+      font-family: 'Helvetica Neue', Arial, sans-serif;
+    }
+    canvas { display: block; }
+    #loading {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+      z-index: 100;
+      transition: opacity 0.8s ease;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+    #loading h1 {
+      color: #fff;
+      font-size: 1.5rem;
+      font-weight: 300;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      margin-bottom: 30px;
+    }
+    .spinner {
+      width: 40px; height: 40px;
+      border: 2px solid rgba(255,255,255,0.1);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #info {
+      position: fixed;
+      bottom: 20px;
+      width: 100%;
+      text-align: center;
+      color: rgba(255,255,255,0.4);
+      font-size: 0.75rem;
+      letter-spacing: 0.15em;
+      pointer-events: none;
+    }
+    #title-logo {
+      position: fixed;
+      top: 20px;
+      width: 100%;
+      text-align: center;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #title-logo img {
+      height: 240px;
+      opacity: 0.95;
+      filter: drop-shadow(0 0 20px rgba(255, 100, 0, 0.6));
+    }
+    #car-name {
+      position: fixed;
+      bottom: 100px;
+      width: 100%;
+      text-align: center;
+      color: rgba(255,255,255,0.8);
+      font-size: 1.4rem;
+      font-weight: 400;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+    .arrow-hint {
+      position: fixed;
+      top: 50%;
+      transform: translateY(-50%);
+      color: rgba(255,255,255,0.2);
+      font-size: 2rem;
+      pointer-events: none;
+      transition: opacity 0.3s;
+    }
+    .arrow-hint.left { left: 20px; }
+    .arrow-hint.right { right: 20px; }
+    #select-prompt {
+      position: fixed;
+      bottom: 50px;
+      width: 100%;
+      text-align: center;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #select-prompt .label {
+      color: rgba(255,255,255,0.6);
+      font-size: 1rem;
+      font-weight: 300;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+    }
+    #select-prompt .enter-hint {
+      display: inline-block;
+      margin-top: 8px;
+      color: #4488ff;
+      font-size: 0.85rem;
+      font-weight: 400;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      animation: blink 1.2s ease-in-out infinite;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="loading">
+  <h1>Loading Showroom</h1>
+  <div class="spinner"></div>
+</div>
+<div id="title-logo"><img src="title.png" alt="Hell Racer"></div>
+<div id="car-name"></div>
+<div class="arrow-hint left">&#9664;</div>
+<div class="arrow-hint right">&#9654;</div>
+<div id="info">DRAG TO ORBIT &bull; SCROLL TO ZOOM &bull; LEFT/RIGHT ARROWS TO BROWSE</div>
+<div id="select-prompt">
+  <div class="label">Select a Car</div>
+  <div class="enter-hint">Press Enter to Start</div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.163.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { startRace } from './game.js';
+
+// --- Sound system (Web Audio API) ---
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+// --- Background music ---
+const bgMusic = new Audio('sound/DRIVE(chosic.com).mp3');
+bgMusic.loop = true;
+bgMusic.volume = 0.7;
+// Export globally so game.js can access it
+window.bgMusic = bgMusic;
+let bgMusicStarted = false;
+
+function playSound(type) {
+  // Resume context on first user interaction
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+
+  // Start background music on first user interaction
+  if (!bgMusicStarted) {
+    bgMusicStarted = true;
+    bgMusic.play().catch(() => { bgMusicStarted = false; });
+  }
+
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  const now = audioCtx.currentTime;
+
+  if (type === 'swoosh') {
+    // Carousel switch — quick swoosh
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(300, now);
+    osc.frequency.exponentialRampToValueAtTime(600, now + 0.08);
+    osc.frequency.exponentialRampToValueAtTime(200, now + 0.15);
+    gain.gain.setValueAtTime(0.15, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+    osc.start(now);
+    osc.stop(now + 0.18);
+  } else if (type === 'select') {
+    // Enter press — confirmation chime
+    const osc2 = audioCtx.createOscillator();
+    const gain2 = audioCtx.createGain();
+    osc2.connect(gain2);
+    gain2.connect(audioCtx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(523, now);
+    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+    osc.start(now);
+    osc.stop(now + 0.3);
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(784, now + 0.12);
+    gain2.gain.setValueAtTime(0.001, now);
+    gain2.gain.setValueAtTime(0.2, now + 0.12);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+    osc2.start(now + 0.12);
+    osc2.stop(now + 0.5);
+  } else if (type === 'engine') {
+    // Engine rev — low rumble rising
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(60, now);
+    osc.frequency.exponentialRampToValueAtTime(180, now + 0.8);
+    osc.frequency.exponentialRampToValueAtTime(300, now + 1.5);
+    gain.gain.setValueAtTime(0.08, now);
+    gain.gain.linearRampToValueAtTime(0.2, now + 0.8);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 2.0);
+    osc.start(now);
+    osc.stop(now + 2.0);
+    // Add noise-like texture
+    const osc3 = audioCtx.createOscillator();
+    const gain3 = audioCtx.createGain();
+    osc3.connect(gain3);
+    gain3.connect(audioCtx.destination);
+    osc3.type = 'square';
+    osc3.frequency.setValueAtTime(45, now);
+    osc3.frequency.exponentialRampToValueAtTime(120, now + 1.0);
+    gain3.gain.setValueAtTime(0.04, now);
+    gain3.gain.linearRampToValueAtTime(0.1, now + 0.8);
+    gain3.gain.exponentialRampToValueAtTime(0.001, now + 2.0);
+    osc3.start(now);
+    osc3.stop(now + 2.0);
+  }
+}
+
+let gameStarted = false;
+
+// --- Car definitions ---
+const carFiles = [
+  { file: 'sample.glb', name: 'Yellow' },
+  { file: 'sample_red.glb', name: 'Red' },
+  { file: 'sample_orange.glb', name: 'Orange' },
+  { file: 'sample_blue.glb', name: 'Blue' },
+  { file: 'sample_green.glb', name: 'Green' },
+];
+
+// --- Scene setup ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050508);
+scene.fog = new THREE.FogExp2(0x050508, 0.035);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+document.body.appendChild(renderer.domElement);
+
+const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(6, 3.5, 6);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.minDistance = 3;
+controls.maxDistance = 15;
+controls.maxPolarAngle = Math.PI / 2.05;
+controls.target.set(0, 0.5, 0);
+controls.update();
+
+// --- Podium ---
+const podiumGroup = new THREE.Group();
+scene.add(podiumGroup);
+
+const podiumGeo = new THREE.CylinderGeometry(2.8, 3.0, 0.15, 64);
+const podiumMat = new THREE.MeshStandardMaterial({
+  color: 0x111115,
+  metalness: 0.3,
+  roughness: 0.4,
+});
+const podium = new THREE.Mesh(podiumGeo, podiumMat);
+podium.position.y = -0.075;
+podium.receiveShadow = true;
+podiumGroup.add(podium);
+
+const rimGeo = new THREE.TorusGeometry(2.9, 0.02, 16, 128);
+const rimMat = new THREE.MeshPhongMaterial({
+  color: 0x4488ff,
+  emissive: 0x2244aa,
+  emissiveIntensity: 2,
+  specular: 0xffffff,
+  shininess: 100,
+});
+const rim = new THREE.Mesh(rimGeo, rimMat);
+rim.rotation.x = -Math.PI / 2;
+rim.position.y = 0.0;
+podiumGroup.add(rim);
+
+const floorGeo = new THREE.PlaneGeometry(60, 60);
+const floorMat = new THREE.MeshStandardMaterial({
+  color: 0x080810,
+  metalness: 0.1,
+  roughness: 0.7,
+});
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.rotation.x = -Math.PI / 2;
+floor.position.y = -0.16;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// --- Lights ---
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+scene.add(new THREE.HemisphereLight(0xaabbff, 0x223344, 0.6));
+
+const projector = new THREE.SpotLight(0xffffff, 150);
+projector.position.set(0, 8, 3);
+projector.angle = Math.PI / 6;
+projector.penumbra = 0.6;
+projector.decay = 1.5;
+projector.distance = 25;
+projector.castShadow = true;
+projector.shadow.mapSize.set(2048, 2048);
+projector.shadow.bias = -0.0001;
+projector.target.position.set(0, 0.5, 0);
+scene.add(projector);
+scene.add(projector.target);
+
+const coneHeight = 8;
+const coneRadius = Math.tan(Math.PI / 6) * coneHeight;
+const coneGeo = new THREE.ConeGeometry(coneRadius, coneHeight, 64, 1, true);
+const coneMat = new THREE.MeshBasicMaterial({
+  color: 0x88aaff,
+  transparent: true,
+  opacity: 0.03,
+  side: THREE.DoubleSide,
+  depthWrite: false,
+});
+const cone = new THREE.Mesh(coneGeo, coneMat);
+cone.position.copy(projector.position);
+cone.position.y -= coneHeight / 2;
+scene.add(cone);
+
+const projector2 = new THREE.SpotLight(0x6688ff, 80);
+projector2.position.set(-2, 7, -4);
+projector2.angle = Math.PI / 7;
+projector2.penumbra = 0.8;
+projector2.decay = 1.5;
+projector2.distance = 20;
+projector2.castShadow = true;
+projector2.shadow.mapSize.set(1024, 1024);
+projector2.target.position.set(0, 0.5, 0);
+scene.add(projector2);
+scene.add(projector2.target);
+
+const projector3 = new THREE.SpotLight(0xff6633, 40);
+projector3.position.set(5, 4, -2);
+projector3.angle = Math.PI / 8;
+projector3.penumbra = 0.7;
+projector3.decay = 1.5;
+projector3.distance = 18;
+projector3.target.position.set(0, 0.5, 0);
+scene.add(projector3);
+scene.add(projector3.target);
+
+// --- Carousel setup ---
+const SPACING = 8; // distance between cars in the carousel
+const carouselGroup = new THREE.Group();
+podiumGroup.add(carouselGroup);
+
+const carSlots = []; // { group, model } per car
+const N = carFiles.length;
+let currentIndex = 0;
+let carouselCurrentX = 0;
+let carouselTargetX = 0;
+let isAnimating = false;
+
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.163.0/examples/jsm/libs/draco/');
+const loader = new GLTFLoader();
+loader.setDRACOLoader(dracoLoader);
+
+// --- Generate environment map for car reflections ---
+const envScene = new THREE.Scene();
+envScene.background = new THREE.Color(0x222233);
+// Add gradient: bright top, dark bottom
+const envLight1 = new THREE.DirectionalLight(0xffffff, 2);
+envLight1.position.set(0, 1, 0);
+envScene.add(envLight1);
+const envLight2 = new THREE.DirectionalLight(0x4466aa, 1);
+envLight2.position.set(0, -1, 0);
+envScene.add(envLight2);
+// Bright panel overhead (like studio softbox)
+const panelGeo = new THREE.PlaneGeometry(10, 10);
+const panelMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+const panel = new THREE.Mesh(panelGeo, panelMat);
+panel.position.set(0, 5, 0);
+panel.rotation.x = Math.PI / 2;
+envScene.add(panel);
+const pmremGenerator = new THREE.PMREMGenerator(renderer);
+pmremGenerator.compileCubemapShader();
+const envRT = pmremGenerator.fromScene(envScene, 0.04);
+const envMap = envRT.texture;
+scene.environment = envMap;
+pmremGenerator.dispose();
+
+let loadedCount = 0;
+
+carFiles.forEach((car, i) => {
+  const slot = new THREE.Group();
+  slot.position.x = i * SPACING;
+  carouselGroup.add(slot);
+  carSlots.push({ group: slot, model: null });
+
+  loader.load(car.file, (gltf) => {
+    const model = gltf.scene;
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const scale = 4.0 / maxDim;
+    model.scale.setScalar(scale);
+
+    model.position.x = -center.x * scale;
+    model.position.y = -box.min.y * scale + 0.08;
+    model.position.z = -center.z * scale;
+
+    model.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+        // Debug: log mesh and material names to help identify glass
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        for (const mat of mats) {
+          console.log(`Mesh: "${child.name}" | Material: "${mat.name}" | color:`, mat.color?.getHexString(), `| opacity: ${mat.opacity} | transparent: ${mat.transparent}`);
+          const name = (mat.name || '').toLowerCase() + (child.name || '').toLowerCase();
+          const isGlass = name.includes('glass') || name.includes('windshield') ||
+                          name.includes('window') || name.includes('vitre') ||
+                          (mat.transparent && mat.opacity < 0.9);
+          if (isGlass) {
+            mat.transparent = true;
+            mat.opacity = Math.min(mat.opacity || 0.35, 0.35);
+            mat.depthWrite = false;
+            mat.side = THREE.DoubleSide;
+            child.castShadow = false;
+            child.renderOrder = 1;
+          }
+        }
+      }
+    });
+
+    slot.add(model);
+    carSlots[i].model = model;
+
+    loadedCount++;
+    if (loadedCount === carFiles.length) {
+      repositionSlots();
+      document.getElementById('loading').classList.add('hidden');
+      updateCarName();
+    }
+  });
+});
+
+function updateCarName() {
+  document.getElementById('car-name').textContent = carFiles[((currentIndex % N) + N) % N].name;
+}
+
+// Reposition slots so they wrap around the current position
+function repositionSlots() {
+  const half = Math.floor(N / 2);
+  for (let i = 0; i < N; i++) {
+    // Offset from current index, wrapped to [-half, N-1-half]
+    let offset = i - ((currentIndex % N) + N) % N;
+    if (offset > half) offset -= N;
+    if (offset < -half) offset += N;
+    carSlots[i].group.position.x = (currentIndex + offset) * SPACING;
+  }
+}
+
+// --- Carousel navigation ---
+window.addEventListener('keydown', (e) => {
+  if (gameStarted) return;
+  if (isAnimating) return;
+
+  if (e.key === 'ArrowRight') {
+    playSound('swoosh');
+    currentIndex++;
+    carouselTargetX = -currentIndex * SPACING;
+    isAnimating = true;
+    repositionSlots();
+    updateCarName();
+  } else if (e.key === 'ArrowLeft') {
+    playSound('swoosh');
+    currentIndex--;
+    carouselTargetX = -currentIndex * SPACING;
+    isAnimating = true;
+    repositionSlots();
+    updateCarName();
+  } else if (e.key === 'Enter') {
+    startGame();
+  }
+});
+
+function startGame() {
+  if (gameStarted) return;
+  gameStarted = true;
+
+  playSound('select');
+  bgMusic.pause();
+  bgMusic.currentTime = 0;
+
+  const selectedIdx = ((currentIndex % N) + N) % N;
+  const selectedCar = carFiles[selectedIdx];
+  const prompt = document.getElementById('select-prompt');
+  const info = document.getElementById('info');
+
+  // Hide ALL showroom UI elements
+  prompt.style.display = 'none';
+  info.style.display = 'none';
+  document.querySelectorAll('.arrow-hint').forEach(el => el.style.display = 'none');
+  const loadingEl = document.getElementById('loading');
+  if (loadingEl) loadingEl.style.display = 'none';
+
+  // Launch race immediately (level screen is created inside startRace, covers everything)
+  cancelAnimationFrame(showroomAnimId);
+  controls.dispose();
+  startRace(renderer, selectedCar.file, carFiles, 0).catch(e => console.error('startRace error:', e));
+}
+
+// --- Animation ---
+const clock = new THREE.Clock();
+let showroomAnimId;
+
+function animate() {
+  showroomAnimId = requestAnimationFrame(animate);
+  const elapsed = clock.getElapsedTime();
+
+  // Smooth carousel sliding
+  const dx = carouselTargetX - carouselGroup.position.x;
+  if (Math.abs(dx) > 0.01) {
+    carouselGroup.position.x += dx * 0.08;
+  } else {
+    carouselGroup.position.x = carouselTargetX;
+    isAnimating = false;
+  }
+
+  // Rotate only the center (active) car
+  const activeSlot = ((currentIndex % N) + N) % N;
+  for (let i = 0; i < carSlots.length; i++) {
+    if (carSlots[i].model) {
+      if (i === activeSlot) {
+        carSlots[i].group.rotation.y = elapsed * 0.3;
+      } else {
+        // Smoothly stop rotation for non-active cars
+        carSlots[i].group.rotation.y += (0 - carSlots[i].group.rotation.y) * 0.02;
+      }
+    }
+  }
+
+  rimMat.emissiveIntensity = 1.5 + Math.sin(elapsed * 2) * 0.5;
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+animate();
+
+// --- Resize ---
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+
+</body>
+</html>
